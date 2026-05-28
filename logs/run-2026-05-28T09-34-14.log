@@ -1,0 +1,107 @@
+[2026-05-28T09:34:14.480Z] run log: ./logs/run-2026-05-28T09-34-14.log
+[2026-05-28T09:34:14.480Z] 35 rows total, 8 to process.
+[2026-05-28T09:34:14.480Z] pacing between profiles: 1-5s
+[2026-05-28T09:34:14.554Z] session ready (CDP @ http://localhost:9222)
+[2026-05-28T09:34:14.554Z] [1/8] eraldvrnn (Erald) -> https://www.tiktok.com/@eraldvrnn
+[2026-05-28T09:34:14.554Z]     -> opening profile https://www.tiktok.com/@eraldvrnn (attempt 1/3)
+[2026-05-28T09:34:16.482Z]     -> looking for Message button
+[2026-05-28T09:34:16.532Z]     -> Message button found
+[2026-05-28T09:34:16.640Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:34:17.466Z]     -> composer ready
+[2026-05-28T09:34:17.467Z]     -> typing message (554 chars)
+[2026-05-28T09:34:35.225Z]     -> pressing Enter to send
+[2026-05-28T09:34:37.942Z]     -> screenshot saved ./logs/25-Erald.png
+[2026-05-28T09:34:37.951Z]     -> delivery check: ok
+[2026-05-28T09:34:37.953Z] [1/8] eraldvrnn: SENT — delivery=ok; screenshot: ./logs/25-Erald.png
+[2026-05-28T09:34:37.953Z]     -> waiting 4.0s before next
+[2026-05-28T09:34:41.963Z] [2/8] Xane (Xane) -> https://www.tiktok.com/@xaneuc
+[2026-05-28T09:34:41.963Z]     -> opening profile https://www.tiktok.com/@xaneuc (attempt 1/3)
+[2026-05-28T09:34:45.364Z]     -> looking for Message button
+[2026-05-28T09:34:46.182Z]     -> Message button found
+[2026-05-28T09:34:46.283Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:34:47.634Z]     -> composer ready
+[2026-05-28T09:34:47.634Z]     -> typing message (553 chars)
+[2026-05-28T09:34:57.656Z]     -> pressing Enter to send
+[2026-05-28T09:35:00.769Z]     -> screenshot saved ./logs/29-Xane.png
+[2026-05-28T09:35:00.777Z]     -> delivery check: ok
+[2026-05-28T09:35:00.778Z] [2/8] Xane: SENT — delivery=ok; screenshot: ./logs/29-Xane.png
+[2026-05-28T09:35:00.778Z]     -> waiting 4.7s before next
+[2026-05-28T09:35:05.484Z] [3/8] Ranta (Ranta) -> https://www.tiktok.com/@rantaone
+[2026-05-28T09:35:05.485Z]     -> opening profile https://www.tiktok.com/@rantaone (attempt 1/3)
+[2026-05-28T09:35:07.632Z]     -> looking for Message button
+[2026-05-28T09:35:07.992Z]     -> Message button found
+[2026-05-28T09:35:08.115Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:35:08.961Z]     -> composer ready
+[2026-05-28T09:35:08.961Z]     -> typing message (554 chars)
+[2026-05-28T09:35:20.524Z]     -> pressing Enter to send
+[2026-05-28T09:35:22.637Z]     -> screenshot saved ./logs/30-Ranta.png
+[2026-05-28T09:35:22.644Z]     -> delivery check: ok
+[2026-05-28T09:35:22.646Z] [3/8] Ranta: SENT — delivery=ok; screenshot: ./logs/30-Ranta.png
+[2026-05-28T09:35:22.646Z]     -> waiting 4.9s before next
+[2026-05-28T09:35:27.553Z] [4/8] prince_poetiray (prince_poetiray) -> https://www.tiktok.com/@prince_poetiray
+[2026-05-28T09:35:27.554Z]     -> opening profile https://www.tiktok.com/@prince_poetiray (attempt 1/3)
+[2026-05-28T09:35:30.763Z]     -> looking for Message button
+[2026-05-28T09:35:30.779Z]     -> Message button found
+[2026-05-28T09:35:30.899Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:35:31.723Z]     -> composer ready
+[2026-05-28T09:35:31.723Z]     -> typing message (564 chars)
+[2026-05-28T09:35:40.280Z]     -> pressing Enter to send
+[2026-05-28T09:35:43.581Z]     -> screenshot saved ./logs/31-prince_poetiray.png
+[2026-05-28T09:35:43.588Z]     -> delivery check: ok
+[2026-05-28T09:35:43.589Z] [4/8] prince_poetiray: SENT — delivery=ok; screenshot: ./logs/31-prince_poetiray.png
+[2026-05-28T09:35:43.589Z]     -> waiting 3.6s before next
+[2026-05-28T09:35:47.203Z] [5/8] ozi alfauz (Ozi) -> https://www.tiktok.com/@ozi.alfauz
+[2026-05-28T09:35:47.203Z]     -> opening profile https://www.tiktok.com/@ozi.alfauz (attempt 1/3)
+[2026-05-28T09:35:49.781Z]     -> looking for Message button
+[2026-05-28T09:35:51.117Z]     -> Message button found
+[2026-05-28T09:35:51.229Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:35:52.072Z]     -> composer ready
+[2026-05-28T09:35:52.072Z]     -> typing message (552 chars)
+[2026-05-28T09:36:09.545Z]     -> pressing Enter to send
+[2026-05-28T09:36:12.766Z]     -> screenshot saved ./logs/32-Ozi.png
+[2026-05-28T09:36:12.774Z]     -> delivery check: ok
+[2026-05-28T09:36:12.775Z] [5/8] ozi alfauz: SENT — delivery=ok; screenshot: ./logs/32-Ozi.png
+[2026-05-28T09:36:12.775Z]     -> waiting 4.7s before next
+[2026-05-28T09:36:17.478Z] [6/8] Raisya (Raisya) -> https://www.tiktok.com/@koecing.garonk
+[2026-05-28T09:36:17.479Z]     -> opening profile https://www.tiktok.com/@koecing.garonk (attempt 1/3)
+[2026-05-28T09:36:19.004Z]     -> looking for Message button
+[2026-05-28T09:36:20.489Z]     -> Message button found
+[2026-05-28T09:36:20.635Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:36:21.451Z]     -> composer ready
+[2026-05-28T09:36:21.451Z]     -> typing message (555 chars)
+[2026-05-28T09:36:33.721Z]     -> pressing Enter to send
+[2026-05-28T09:36:36.325Z]     -> screenshot saved ./logs/33-Raisya.png
+[2026-05-28T09:36:36.333Z]     -> delivery check: ok
+[2026-05-28T09:36:36.334Z] [6/8] Raisya: SENT — delivery=ok; screenshot: ./logs/33-Raisya.png
+[2026-05-28T09:36:36.334Z]     -> waiting 1.3s before next
+[2026-05-28T09:36:37.609Z] [7/8] Angie Mayra (Angie) -> https://www.tiktok.com/@mayradeva
+[2026-05-28T09:36:37.610Z]     -> opening profile https://www.tiktok.com/@mayradeva (attempt 1/3)
+[2026-05-28T09:36:39.654Z]     -> looking for Message button
+[2026-05-28T09:36:39.676Z]     -> Message button found
+[2026-05-28T09:36:39.758Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:36:51.761Z]     -> attempt 1 failed (locator.waitFor: Timeout 12000ms exceeded.)
+[2026-05-28T09:36:51.762Z]     -> reloading and retrying
+[2026-05-28T09:36:53.355Z]     -> opening profile https://www.tiktok.com/@mayradeva (attempt 2/3)
+[2026-05-28T09:36:55.046Z]     -> looking for Message button
+[2026-05-28T09:36:55.102Z]     -> Message button found
+[2026-05-28T09:36:55.218Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:36:56.073Z]     -> composer ready
+[2026-05-28T09:36:56.073Z]     -> typing message (554 chars)
+[2026-05-28T09:37:08.951Z]     -> pressing Enter to send
+[2026-05-28T09:37:11.039Z]     -> screenshot saved ./logs/34-Angie.png
+[2026-05-28T09:37:11.048Z]     -> delivery check: ok
+[2026-05-28T09:37:11.050Z] [7/8] Angie Mayra: SENT — delivery=ok; screenshot: ./logs/34-Angie.png
+[2026-05-28T09:37:11.050Z]     -> waiting 2.4s before next
+[2026-05-28T09:37:13.487Z] [8/8] Naura (Naura) -> https://www.tiktok.com/@naumaritzaa
+[2026-05-28T09:37:13.488Z]     -> opening profile https://www.tiktok.com/@naumaritzaa (attempt 1/3)
+[2026-05-28T09:37:15.289Z]     -> looking for Message button
+[2026-05-28T09:37:15.311Z]     -> Message button found
+[2026-05-28T09:37:15.459Z]     -> clicked Message, waiting for composer
+[2026-05-28T09:37:16.307Z]     -> composer ready
+[2026-05-28T09:37:16.308Z]     -> typing message (554 chars)
+[2026-05-28T09:37:28.377Z]     -> pressing Enter to send
+[2026-05-28T09:37:30.564Z]     -> screenshot saved ./logs/35-Naura.png
+[2026-05-28T09:37:30.575Z]     -> delivery check: ok
+[2026-05-28T09:37:30.577Z] [8/8] Naura: SENT — delivery=ok; screenshot: ./logs/35-Naura.png
+[2026-05-28T09:37:30.577Z] done. tally: {"SENT":8}
+[2026-05-28T09:37:30.577Z] review screenshots in ./logs/ and the run log ./logs/run-2026-05-28T09-34-14.log

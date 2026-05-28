@@ -1,0 +1,15 @@
+{
+  "name": "tiktok-blast",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "blast": "node blast.mjs",
+    "dry": "node blast.mjs --dry-run"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.6",
+    "csv-stringify": "^6.5.1",
+    "playwright": "^1.48.0"
+  }
+}

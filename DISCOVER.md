@@ -51,6 +51,39 @@ Results are deduped two ways so the creators you get are genuinely new:
 kept (then it stops). If the seeds don't yield X new candidates, it keeps what
 it found and logs a note — add more seeds or raise `--scrolls` to go deeper.
 
+> Reaching a big target (say 1000) needs enough supply. One hashtag yields
+> ~150 creators total, of which only a slice fall in your follower band — so for
+> large targets, pass **many seeds** (hashtags + keywords).
+
+### Resuming & error recovery
+
+Runs are built to be stopped, crash, and continued without losing or repeating
+work:
+
+- **Per-profile resilience.** If Chrome drops or a tab crashes mid-run, the
+  script reconnects/reopens and **retries that profile once**. Transient errors
+  are **not** cached, so they get retried on the next pass instead of being
+  skipped forever.
+- **Crash-safe progress.** Every scraped profile is written to
+  `logs/discover-cache.json` immediately. A fatal crash loses at most the one
+  profile in flight.
+- **Continue toward the target.** Re-run the **same command** and it reuses the
+  cache (cached profiles return instantly) and keeps going until it hits
+  `--target`. Same seeds → same output CSV, so results accumulate in one file.
+- **`--resume`** skips the harvest entirely and just drains the saved candidate
+  queue — fastest way to pick up after a stop:
+
+  ```bash
+  # first run (gets interrupted, or stops below target)
+  node discover.mjs "#reviewbuku" "#booktokindonesia" --target=1000 --min-followers=10000 --max-followers=100000
+
+  # continue where it left off — no re-harvest, cached profiles reused
+  node discover.mjs "#reviewbuku" "#booktokindonesia" --target=1000 --min-followers=10000 --max-followers=100000 --resume
+  ```
+
+  The candidate queue + output path live in `logs/discover-state-<seeds>.json`,
+  keyed by the seed set, so resume only works when you pass the **same seeds**.
+
 ### Contact phone extraction
 
 Creators often put a "CP" / WhatsApp number in their bio. The script extracts
@@ -141,6 +174,7 @@ All optional; every one has a sensible default.
 | `--out=path` | `discovered-<stamp>.csv` | Output CSV path |
 | `--exclude=path` | `./creators.csv` | Skip handles already in this CSV (uniqueness) |
 | `--no-exclude` | off | Don't exclude anyone — discover even known creators |
+| `--resume` | off | Skip harvest; continue draining the saved candidate queue toward `--target` |
 
 Seeds are any non-`--` arguments. A leading `#` makes it a hashtag; anything
 else is treated as a search keyword (or a URL if it starts with `http`).

@@ -66,6 +66,14 @@ Output is a CSV whose **first 9 columns match `creators.csv`**, so good rows
 paste straight into the blast list. See [DISCOVER.md](./DISCOVER.md) for every
 flag (follower band, target count, sampling, pacing, uniqueness/exclusion, etc.).
 
+Runs are resumable: if one stops or crashes below `--target`, re-run the same
+command (or add `--resume`) and it continues from the cache toward the target.
+For a big target, pass several seeds and a follower band, e.g.:
+```bash
+node discover.mjs "#reviewbuku" "#booktokindonesia" "rekomendasi buku" \
+  --min-followers=10000 --max-followers=100000 --target=1000
+```
+
 ### Blast DMs
 ```bash
 npm run dry        # dry run — finds the Message button but sends nothing

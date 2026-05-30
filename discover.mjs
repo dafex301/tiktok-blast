@@ -63,9 +63,14 @@ const MAX_VISITS = parseInt(flag("max-visits", String(TARGET * 4)), 10);
 const SCROLLS = parseInt(flag("scrolls", "8"), 10);
 const SAMPLE = parseInt(flag("sample", "12"), 10);
 const OUT = flag("out", `discovered-${RUN_STAMP}.csv`);
+const OUT_EXPLICIT = argv.some((a) => a.startsWith("--out="));
+const RESUME = argv.includes("--resume"); // skip harvest, drain saved candidate queue
 const EXCLUDE_PATH = flag("exclude", "./creators.csv"); // skip creators already here
 const NO_EXCLUDE = argv.includes("--no-exclude");
 const CACHE = `${LOG_DIR}/discover-cache.json`; // username -> enriched record (resumable)
+// only these statuses are final — ERROR/transient are left uncached so a re-run
+// (or --resume) retries them instead of skipping forever.
+const TERMINAL = new Set(["OK", "PRIVATE", "NOT_FOUND", "NO_DATA"]);
 const CDP_URL = process.env.CDP_URL || "http://localhost:9223";
 let [DELAY_MIN, DELAY_MAX] = (flag("delay", "2,6")).split(",").map(Number);
 if (Number.isNaN(DELAY_MAX)) DELAY_MAX = DELAY_MIN;
@@ -151,6 +156,24 @@ async function getSession() {
   const ctx = browser.contexts()[0] || (await browser.newContext());
   const page = await ctx.newPage();
   return { browser, ctx, page, cleanup: async () => { await browser.close(); } };
+}
+
+// Repair a dead session in place: reconnect if the CDP browser dropped, or open
+// a fresh tab if our page crashed. Mirrors blast.mjs so a mid-run Chrome hiccup
+// doesn't kill the whole sweep.
+async function ensureHealthy(session) {
+  try {
+    if (!session.browser.isConnected()) {
+      log(`    -> browser disconnected; reconnecting over CDP`);
+      Object.assign(session, await getSession());
+    } else if (session.page.isClosed()) {
+      log(`    -> tab was closed; opening a fresh one`);
+      session.page = await session.ctx.newPage();
+    }
+  } catch (e) {
+    log(`    -> repair failed (${e.message.split("\n")[0]}); reconnecting`);
+    Object.assign(session, await getSession());
+  }
 }
 
 function seedUrl(seed) {
@@ -257,6 +280,21 @@ function loadCache() {
 }
 function saveCache(c) { writeFileSync(CACHE, JSON.stringify(c, null, 2)); }
 
+// --- campaign state (the candidate queue + output path, per seed set) --------
+// Lets you stop/crash and resume toward the target without re-harvesting, and
+// keeps re-runs of the same seeds writing to the same CSV.
+function stateKey() {
+  const k = seeds.map((s) => s.trim().toLowerCase()).sort().join("|")
+    .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60);
+  return k || "default";
+}
+const STATE = `${LOG_DIR}/discover-state-${stateKey()}.json`;
+function loadState() {
+  if (!existsSync(STATE)) return null;
+  try { return JSON.parse(readFileSync(STATE, "utf8")); } catch { return null; }
+}
+function saveState(s) { writeFileSync(STATE, JSON.stringify(s, null, 2)); }
+
 // Usernames to skip so results are unique vs. people you already have/contacted.
 // Reads the @handle out of each Link (or the Username column) in creators.csv.
 function loadExcluded() {
@@ -278,7 +316,7 @@ function greetingFor(name, username) {
 }
 
 // Write blast-compatible CSV (first 9 cols == creators.csv) + metric columns.
-function writeOut(records) {
+function writeOut(records, outPath) {
   const header = [
     "No", "Name", "Greeting", "Platform", "Followers", "Notes", "Link", "Status", "SentAt",
     "ContactPerson", "Username", "Following", "Likes", "AvgViews", "MedianViews", "Engagement", "RegionHint", "Score", "Bio",
@@ -304,7 +342,7 @@ function writeOut(records) {
     Score: r.score,
     Bio: r.bio || "",
   }));
-  writeFileSync(OUT, stringify(rows, { header: true, columns: header }));
+  writeFileSync(outPath, stringify(rows, { header: true, columns: header }));
 }
 
 async function main() {
@@ -315,28 +353,40 @@ async function main() {
   const session = await getSession();
   log(`session ready (CDP @ ${CDP_URL})`);
 
-  // Phase 1: harvest unique usernames across all seeds.
-  const usernames = new Set();
-  for (const seed of seeds) {
-    try {
-      const us = await harvest(session.page, seed);
-      us.forEach((u) => usernames.add(u));
-    } catch (e) {
-      log(`    harvest error on "${seed}": ${e.message.split("\n")[0]}`);
+  // Resume context: reuse the same output file + candidate queue across runs of
+  // the same seed set, so a stop/crash can be continued toward the target.
+  const prior = loadState();
+  const outPath = OUT_EXPLICIT ? OUT : (prior?.out || OUT);
+  const candidates = new Set(prior?.candidates || []);
+
+  // Phase 1: harvest unique usernames across all seeds (skipped on --resume).
+  if (RESUME) {
+    if (!candidates.size) { log(`--resume but no saved candidates for these seeds (${STATE}) — run once without --resume first.`); }
+    log(`resume: skipping harvest, ${candidates.size} candidates from prior run`);
+  } else {
+    for (const seed of seeds) {
+      try {
+        await ensureHealthy(session);
+        (await harvest(session.page, seed)).forEach((u) => candidates.add(u));
+      } catch (e) {
+        log(`    harvest error on "${seed}": ${e.message.split("\n")[0]}`);
+      }
+      await sleep(jitter(DELAY_MIN * 1000, DELAY_MAX * 1000));
     }
-    await sleep(jitter(DELAY_MIN * 1000, DELAY_MAX * 1000));
   }
+  saveState({ seeds, out: outPath, candidates: [...candidates], updatedAt: RUN_STAMP });
+
   // Uniqueness: drop anyone already in creators.csv (already contacted/owned).
   const excluded = loadExcluded();
-  const list = [...usernames].filter((u) => !excluded.has(u.toLowerCase()));
-  log(`harvested ${usernames.size} unique creators across ${seeds.length} seed(s); `
-    + `${usernames.size - list.length} already known → ${list.length} new candidates`
+  const list = [...candidates].filter((u) => !excluded.has(u.toLowerCase()));
+  log(`${candidates.size} unique candidates; ${candidates.size - list.length} already known → ${list.length} to consider`
     + (excluded.size ? ` (excluding ${excluded.size} from ${EXCLUDE_PATH})` : ""));
   if (list.length < TARGET) {
-    log(`note: only ${list.length} new candidates < target ${TARGET} — add more seeds or raise --scrolls to reach ${TARGET}`);
+    log(`note: only ${list.length} candidates < target ${TARGET} — add more seeds or raise --scrolls to reach ${TARGET}`);
   }
 
-  // Phase 2: enrich each (cached results reused; pacing between live visits).
+  // Phase 2: enrich each (cached results reused; retries + session repair on
+  // transient errors; ERROR is NOT cached so a re-run picks it up again).
   const cache = loadCache();
   const kept = [];
   let visits = 0;
@@ -350,15 +400,24 @@ async function main() {
     } else {
       visits++;
       log(`[visit ${visits}] @${username}`);
-      try {
-        rec = await enrich(session.page, username);
-      } catch (e) {
-        log(`    -> error: ${e.message.split("\n")[0]}`);
-        rec = { username, link: `https://www.tiktok.com/@${username}`, status: "ERROR" };
+      for (let tries = 1; tries <= 2; tries++) {
+        try {
+          await ensureHealthy(session);
+          rec = await enrich(session.page, username);
+          break;
+        } catch (e) {
+          const msg = e.message.split("\n")[0];
+          log(`    -> error: ${msg}`);
+          if (tries === 1 && /closed|disconnect|crash|Target|Navigation|timeout|detached/i.test(e.message)) {
+            log(`    -> repairing session and retrying @${username}`);
+            await ensureHealthy(session);
+            await sleep(jitter(1500, 3000));
+            continue;
+          }
+          rec = { username, link: `https://www.tiktok.com/@${username}`, status: "ERROR", note: msg };
+        }
       }
-      rec._v = 1;
-      cache[username] = rec;
-      saveCache(cache);
+      if (TERMINAL.has(rec.status)) { rec._v = 1; cache[username] = rec; saveCache(cache); }
       await sleep(jitter(DELAY_MIN * 1000, DELAY_MAX * 1000));
     }
 
@@ -377,10 +436,13 @@ async function main() {
 
   // Phase 3: rank by score (reach × engagement), write output.
   kept.sort((a, b) => (b.score || 0) - (a.score || 0));
-  writeOut(kept);
-  log(`done. kept ${kept.length} creators -> ${OUT}`);
+  writeOut(kept, outPath);
+  log(`done. kept ${kept.length}/${TARGET} creators -> ${outPath}`);
+  if (kept.length < TARGET) {
+    log(`below target — re-run the same command (or add 'node discover.mjs ${seeds.map((s) => `"${s}"`).join(" ")} --resume') to continue; cached profiles are reused.`);
+  }
   log(`(first 9 columns match creators.csv — paste good rows straight into the blast list)`);
   await session.cleanup();
 }
 
-main().catch((e) => { log(`FATAL: ${e.message}`); process.exit(1); });
+main().catch((e) => { log(`FATAL: ${e.message}`); log(`progress is saved — re-run to continue (cached profiles are reused).`); process.exit(1); });

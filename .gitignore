@@ -6,3 +6,4 @@ node_modules/
 discovered*.csv
 logs/discover-*.log
 logs/discover-cache.json
+logs/discover-state-*.json

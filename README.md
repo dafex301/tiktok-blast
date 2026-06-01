@@ -4,14 +4,19 @@ Two small Node.js tools for TikTok creator outreach, driving a real Chrome over
 CDP (Playwright):
 
 ```
-discover.mjs  →  discovered-*.csv  →  (review/edit)  →  creators.csv  →  blast.mjs
-   find creators by keyword/hashtag        your outreach list      send the DMs
+discover.mjs  →  discovered-*.csv  →  screen.mjs  →  creators.csv  →  blast.mjs
+   find creators by keyword/hashtag     AI picks fits   outreach list    send the DMs
 ```
 
 - **`discover.mjs`** — seed a hashtag (`#reviewbuku`) or keyword, harvest the
   creators posting under it, visit each profile, and score them on followers,
   avg/median views, engagement, region, and a contact phone pulled from the bio.
   Full docs: **[DISCOVER.md](./DISCOVER.md)**.
+- **`screen.mjs`** — the agentic step: screenshots each creator's recent videos,
+  uses an OpenAI **vision** model to read their content's style/tone/audience and
+  a **text** model to score campaign fit and decide keep/skip — then writes the
+  keepers straight to `creators.csv`. Goes beyond raw stats so the pipeline runs
+  discovery-to-DM with no manual review. Needs `OPENAI_API_KEY`.
 - **`blast.mjs`** — read `creators.csv` and send each pending creator a templated
   DM, screenshotting and recording delivery status as it goes.
 

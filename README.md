@@ -86,10 +86,17 @@ node discover.mjs "#reviewbuku" "#booktokindonesia" "rekomendasi buku" \
 ```bash
 npm run dry        # dry run — finds the Message button + picks a video, sends nothing
 npm run blast      # DM every pending row, then comment on their least-popular video
-node blast.mjs --limit=5 --delay=6,14
+node blast.mjs --limit=5
 node blast.mjs --no-comment      # DM only (old behavior)
 node blast.mjs --comment-only    # skip DMs, only post comment nudges on already-DMed rows
 ```
+
+**Rate limiting** (on by default — TikTok bans bursty automation):
+- **Pacing:** randomized **30–90s** between creators. Override `--delay=min,max` (e.g. `--delay=20,60`).
+- **Batch pauses:** rests **8–15 min** after roughly every **10** creators, to mimic a human stepping away. Tune with `--batch-every=N` / `--batch-pause=min,max` (minutes), or `--no-batch-pause` to disable.
+- **Daily cap:** **50** creators/day, **persisted across runs** in `logs/daily-state.json` (per-machine, gitignored) so multiple runs in one day don't blow past it. Override `--daily-cap=N`. Resets at local midnight.
+
+These defaults suit a **mature** account. New/low-trust accounts should warm up first and use much lower caps + longer delays.
 
 The DM and comment steps are tracked separately, so the run is resumable per step:
 - `Status` / `SentAt` — the DM (`SENT`, `NO_DM`, `SKIPPED`, …).

@@ -53,12 +53,18 @@ Flags: `--no-comment` (DM only), `--comment-only` (skip DM), `--limit=N`, `--del
 Port override: `CDP_URL=http://localhost:9224 node blast.mjs ...` (or launch on a different port).
 
 ## Current campaign state (`creators.csv`)
-- 35 rows. **DMs: all `SENT`.** Comments: `Keyla = COMMENTED` (the test), the other **34 are blank**.
-- `node blast.mjs --comment-only` will comment on those 34 SENT-but-not-yet-commented rows.
+- 35 rows. **DMs: all `SENT`.** Comments: `Keyla` + `dian` = `COMMENTED` (verified tests), the other **33 are blank**.
+- `node blast.mjs --comment-only` will comment on those 33 SENT-but-not-yet-commented rows.
 - ⚠️ **Run on ONE machine at a time.** `creators.csv` is the source of truth and is updated after every row. After a run, **commit `creators.csv` back and push** so the other machine stays in sync — otherwise the two copies diverge and creators get double-touched.
 
+## Rate limiting (implemented — tuned for a MATURE account)
+On by default in `blast.mjs`:
+- **Pacing:** randomized **30–90s** between creators (`--delay=min,max` to change).
+- **Batch pauses:** rest **8–15 min** after ~every **10** creators (`--batch-every=N`, `--batch-pause=min,max` minutes, `--no-batch-pause`).
+- **Daily cap:** **50** creators/day, persisted in `logs/daily-state.json` (per-machine, gitignored, resets at local midnight; `--daily-cap=N`).
+- Transient profile-load failures under load are normal and **retryable** (`COMMENT_FAILED`) — the proper pacing avoids the bursty throttling that causes them.
+
 ## Open decisions / cautions
-- **No daily cap in the script.** Commenting from a fresh account on ~30 profiles back-to-back (right after DMing) is a spam-flag risk. Recommend small batches (`--limit=5`) with longer `--delay` (e.g. `--delay=8,20`). *(Not yet implemented — ask if you want a hard daily cap added.)*
 - **Account match matters:** the comment must come from the same account that sent the DMs (`nada.tunelab`). A nudge from a different account points at a DM the creator can't find.
 - `blast.mjs:32` hardcodes the **macOS** Chrome path — only used by `--fresh` mode. On Windows/Linux, don't use `--fresh` without editing that line; the default CDP flow is fine everywhere.
 

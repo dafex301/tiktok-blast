@@ -7,3 +7,6 @@ discovered*.csv
 logs/discover-*.log
 logs/discover-cache.json
 logs/discover-state-*.json
+
+# per-machine daily action counter (local only)
+logs/daily-state.json

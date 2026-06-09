@@ -58,15 +58,36 @@ const COMMENT_VIDEO_TRIES = 3; // least-popular videos to try before giving up
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const TUNELAB_PROFILE = "Profile 16"; // tunelabid@gmail.com
 
-// Gap between creators, in seconds. Override: --delay=min,max (e.g. --delay=4,10).
-// Lower = faster but more bot-like (higher ban risk). Default 6-14s.
+// Gap between creators, in seconds. Override: --delay=min,max (e.g. --delay=20,60).
+// Randomized (never a fixed interval — a fixed sleep is itself a bot signal).
+// Default 30-90s to mimic natural spacing.
 const delayArg = args.find((a) => a.startsWith("--delay="));
-let [DELAY_MIN, DELAY_MAX] = [1, 5];
+let [DELAY_MIN, DELAY_MAX] = [30, 90];
 if (delayArg) {
   const p = delayArg.split("=")[1].split(",").map(Number);
   DELAY_MIN = p[0];
   DELAY_MAX = p[1] ?? p[0];
 }
+
+// Daily cap on creators acted on, PERSISTED across runs (logs/daily-state.json)
+// so several runs in one day don't blow past it. Override: --daily-cap=N.
+const dailyCapArg = args.find((a) => a.startsWith("--daily-cap="));
+const DAILY_CAP = dailyCapArg ? parseInt(dailyCapArg.split("=")[1], 10) : 50;
+
+// Batch pauses: after roughly every BATCH_EVERY creators, rest a randomized
+// number of minutes to mimic a human stepping away. Override: --batch-pause=min,max
+// (minutes), or --no-batch-pause to disable. Set --batch-every=N to change cadence.
+const NO_BATCH_PAUSE = args.includes("--no-batch-pause");
+const batchEveryArg = args.find((a) => a.startsWith("--batch-every="));
+const BATCH_EVERY = batchEveryArg ? parseInt(batchEveryArg.split("=")[1], 10) : 10;
+let [BATCH_PAUSE_MIN, BATCH_PAUSE_MAX] = [8, 15]; // minutes
+const batchPauseArg = args.find((a) => a.startsWith("--batch-pause="));
+if (batchPauseArg) {
+  const p = batchPauseArg.split("=")[1].split(",").map(Number);
+  BATCH_PAUSE_MIN = p[0];
+  BATCH_PAUSE_MAX = p[1] ?? p[0];
+}
+
 const MAX_PAGE_ATTEMPTS = 3; // reload-retries for the logged-out-page TikTok bug
 
 // statuses that mean "leave it alone"
@@ -95,6 +116,24 @@ function stamp() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// --- persisted per-day action counter (for the daily cap) -------------------
+const DAILY_STATE = `${LOG_DIR}/daily-state.json`;
+function todayStr() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function loadDaily() {
+  try {
+    const s = JSON.parse(readFileSync(DAILY_STATE, "utf8"));
+    if (s.date === todayStr()) return s; // stale (previous day) -> reset
+  } catch {}
+  return { date: todayStr(), count: 0 };
+}
+function saveDaily(s) {
+  try { writeFileSync(DAILY_STATE, JSON.stringify(s)); } catch {}
 }
 
 // --- per-row state predicates ----------------------------------------------
@@ -418,20 +457,33 @@ async function main() {
   log(`run log: ${RUN_LOG}`);
   const mode = COMMENT_ONLY ? "comment-only" : DO_COMMENT ? "DM + comment" : "DM only";
   log(`${rows.length} rows total, ${pending.length} to process — mode: ${mode}${DRY_RUN ? " (DRY RUN)" : ""}.`);
-  log(`pacing between profiles: ${DELAY_MIN}-${DELAY_MAX}s`);
+
+  // Daily cap, persisted across runs. Dry runs don't count toward it.
+  const daily = loadDaily();
+  const remainingToday = DRY_RUN ? Infinity : Math.max(0, DAILY_CAP - daily.count);
+  if (!DRY_RUN) {
+    log(`daily cap: ${DAILY_CAP}/day — ${daily.count} done today (${daily.date}), ${remainingToday} left`);
+    if (remainingToday === 0) {
+      log(`daily cap already reached for ${daily.date}; nothing to do. (override with --daily-cap=N)`);
+      return; // no session launched
+    }
+  }
+  log(`pacing between profiles: ${DELAY_MIN}-${DELAY_MAX}s` +
+    (NO_BATCH_PAUSE ? "; batch pauses off" : `; batch pause ${BATCH_PAUSE_MIN}-${BATCH_PAUSE_MAX} min every ~${BATCH_EVERY}`));
 
   const session = await getSession();
   log(`session ready (${FRESH ? "fresh profile" : "CDP @ " + CDP_URL})`);
 
-  const total = Math.min(pending.length, LIMIT);
+  const total = Math.min(pending.length, LIMIT, remainingToday);
   let count = 0;
+  let nextBatchAt = jitter(BATCH_EVERY - 2, BATCH_EVERY + 3); // first pause ~BATCH_EVERY, randomized
   const tally = {};
   const bump = (s) => (tally[s] = (tally[s] || 0) + 1);
   for (const row of pending) {
-    if (count >= LIMIT) break;
+    if (count >= total) break;
     count++;
     const greeting = greetingFor(row);
-    log(`[${count}/${total}] ${row.Name} (${greeting}) -> ${row.Link}`);
+    log(`[${count}/${total}] ${row.Name} (${greeting}) -> ${row.Link}  (today ${daily.count}/${DAILY_CAP})`);
 
     // --- DM step ---
     if (!COMMENT_ONLY && !dmDone(row)) {
@@ -454,15 +506,26 @@ async function main() {
       log(`[${count}/${total}] ${row.Name}: COMMENT ${cres.status} — ${cres.note}`);
     }
 
-    // gap between creators
+    // count this creator toward the persisted daily cap
+    if (!DRY_RUN) { daily.count++; saveDaily(daily); }
+
+    // gap before the next creator: batch pause every ~BATCH_EVERY, else normal delay
     if (count < total) {
-      const wait = jitter(DELAY_MIN * 1000, DELAY_MAX * 1000);
-      log(`    -> waiting ${(wait / 1000).toFixed(1)}s before next`);
-      await sleep(wait);
+      if (!NO_BATCH_PAUSE && count >= nextBatchAt) {
+        const mins = BATCH_PAUSE_MIN + Math.random() * (BATCH_PAUSE_MAX - BATCH_PAUSE_MIN);
+        log(`    -> batch pause: resting ${mins.toFixed(1)} min after ${count} creators this run`);
+        await sleep(mins * 60 * 1000);
+        nextBatchAt = count + jitter(BATCH_EVERY - 2, BATCH_EVERY + 3);
+      } else {
+        const wait = jitter(DELAY_MIN * 1000, DELAY_MAX * 1000);
+        log(`    -> waiting ${(wait / 1000).toFixed(1)}s before next`);
+        await sleep(wait);
+      }
     }
   }
 
   log(`done. tally: ${JSON.stringify(tally)}`);
+  if (!DRY_RUN) log(`daily total now ${daily.count}/${DAILY_CAP} for ${daily.date}`);
   log(`review screenshots in ${LOG_DIR}/ and the run log ${RUN_LOG}`);
   await session.cleanup();
 }

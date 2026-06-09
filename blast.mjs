@@ -54,6 +54,9 @@ const NO_COMMENT = args.includes("--no-comment");     // DM only (old behavior)
 const COMMENT_ONLY = args.includes("--comment-only"); // skip DM, only comment
 const DO_COMMENT = !NO_COMMENT;
 const COMMENT_VIDEO_TRIES = 3; // least-popular videos to try before giving up
+// When a captcha appears, pause and let the human running this solve it by hand,
+// then continue. Only halt the run if it's still unsolved past this window.
+const CAPTCHA_WAIT_S = Number((args.find((a) => a.startsWith("--captcha-wait=")) || "").split("=")[1]) || 240;
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const TUNELAB_PROFILE = "Profile 16"; // tunelabid@gmail.com
@@ -278,6 +281,48 @@ async function pickCandidates(page) {
   return items.sort((a, b) => a.views - b.views);
 }
 
+// TikTok throws a slider/puzzle captcha when it suspects automation. We can't
+// solve it, so detect it and halt the run rather than blindly marking success.
+async function isCaptcha(page) {
+  try {
+    return await page.evaluate(() => {
+      const sels = [
+        ".captcha_verify_container",
+        ".captcha-verify-container",
+        ".secsdk-captcha-drag-icon",
+        "#captcha-verify-image",
+        'div[id*="captcha"]',
+      ];
+      if (sels.some((s) => document.querySelector(s))) return true;
+      return /drag the slider to fit the puzzle|geser.*puzzle|verify to continue/i.test(
+        document.body?.innerText || ""
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+// Poll until the captcha is gone (the human solved it) or we time out.
+async function waitForCaptchaCleared(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let logged = 0;
+  while (Date.now() < deadline) {
+    if (!(await isCaptcha(page))) return true;
+    const leftS = Math.ceil((deadline - Date.now()) / 1000);
+    if (Date.now() - logged > 20000) { log(`    -> [comment] still waiting for captcha to be solved (~${leftS}s left)...`); logged = Date.now(); }
+    await sleep(2500);
+  }
+  return false;
+}
+
+// Pull the @handle out of a profile or video URL, lowercased. e.g.
+// https://www.tiktok.com/@petrovacatherina/video/123 -> "petrovacatherina"
+function handleFromUrl(url) {
+  const m = (url || "").match(/@([^/?#]+)/);
+  return m ? m[1].toLowerCase() : null;
+}
+
 // After the DM, post a public comment on the least-popular recent video so the
 // creator sees a nudge to check their DM. Tries up to COMMENT_VIDEO_TRIES of
 // the lowest-view videos in case the first has comments disabled.
@@ -302,6 +347,23 @@ async function commentOnVideo(page, row) {
   }
   if (!candidates.length) {
     return { status: "COMMENT_FAILED", note: "no videos found on profile" };
+  }
+
+  // Guard: the videos must actually belong to the target creator. When a profile
+  // is renamed/deactivated/private, TikTok can redirect to the logged-in user's
+  // own feed — commenting there nudges the wrong (or our own) account. Drop any
+  // candidate whose handle doesn't match the target, and bail if none remain.
+  const targetHandle = handleFromUrl(link);
+  if (targetHandle) {
+    const matched = candidates.filter((c) => handleFromUrl(c.href) === targetHandle);
+    if (!matched.length) {
+      const got = [...new Set(candidates.map((c) => handleFromUrl(c.href)).filter(Boolean))].join(", ") || "unknown";
+      return {
+        status: "COMMENT_WRONG_PROFILE",
+        note: `@${targetHandle} did not load — videos belonged to: ${got}. Skipped to avoid commenting on the wrong account.`,
+      };
+    }
+    candidates = matched;
   }
 
   if (DRY_RUN) {
@@ -363,15 +425,61 @@ async function commentOnVideo(page, row) {
       if (!posted) await page.keyboard.press("Enter");
 
       await sleep(jitter(1800, 3000));
-      // Ground-truth-ish: the editor clears once a comment actually submits.
-      let cleared = false;
-      try { cleared = !(await box.innerText()).trim(); } catch { cleared = true; }
       const shot = `${LOG_DIR}/${row.No}-${greeting.replace(/\W+/g, "_")}-comment.png`;
-      await page.screenshot({ path: shot });
-      log(`    -> [comment] screenshot saved ${shot}`);
+      await page.screenshot({ path: shot }).catch(() => {});
+
+      // Posting often triggers a slider captcha. We can't solve it, but the
+      // human running this can — pause and wait for them to clear it, then
+      // finalize. Only halt if it's left unsolved past CAPTCHA_WAIT_S.
+      if (await isCaptcha(page)) {
+        log(`    -> [comment] CAPTCHA — solve the slider in the browser now; waiting up to ${CAPTCHA_WAIT_S}s...`);
+        const solved = await waitForCaptchaCleared(page, CAPTCHA_WAIT_S * 1000);
+        if (!solved) {
+          return {
+            status: "COMMENT_CAPTCHA",
+            note: `captcha not solved within ${CAPTCHA_WAIT_S}s on ${cand.href} — run halted; solve it and re-run. screenshot: ${shot}`,
+          };
+        }
+        log(`    -> [comment] captcha cleared — finalizing post`);
+        await sleep(jitter(1000, 1800));
+        // Solving usually completes the pending submit; if our text is still in
+        // the editor, click Post once more to actually send it.
+        try {
+          const editor = page
+            .locator('[data-e2e="comment-input"] div[contenteditable="true"]')
+            .or(page.locator(".public-DraftEditor-content"))
+            .first();
+          const leftover = (await editor.innerText().catch(() => "")).trim();
+          if (leftover) {
+            const postBtn = page.locator('[data-e2e="comment-post"]:not([disabled])').first();
+            await postBtn.click({ timeout: 5000 }).catch(() => {});
+            await sleep(jitter(1500, 2500));
+          }
+        } catch {}
+        await page.screenshot({ path: shot }).catch(() => {});
+        if (await isCaptcha(page)) {
+          return { status: "COMMENT_CAPTCHA", note: `captcha reappeared on ${cand.href} — halting; solve it and re-run. screenshot: ${shot}` };
+        }
+      }
+
+      // Confirm the post really landed: the editor clears AND/OR a "Comment
+      // posted" toast appears. On error we treat it as NOT confirmed (retryable)
+      // rather than assuming success.
+      let cleared = false;
+      try { cleared = !(await box.innerText()).trim(); } catch { cleared = false; }
+      let toast = false;
+      try { toast = await page.evaluate(() => /comment posted/i.test(document.body?.innerText || "")); } catch {}
+      const confirmed = cleared || toast;
+      log(`    -> [comment] screenshot saved ${shot} (confirmed=${confirmed})`);
+      if (!confirmed) {
+        return {
+          status: "COMMENT_FAILED",
+          note: `post not confirmed (editor not cleared, no success toast) on ${cand.href}; screenshot: ${shot}`,
+        };
+      }
       return {
         status: "COMMENTED",
-        note: `"${text}" on ${cand.href} (${ccount ?? "?"} comments, ~${cand.views} views); submitted=${cleared}; screenshot: ${shot}`,
+        note: `"${text}" on ${cand.href} (${ccount ?? "?"} comments, ~${cand.views} views); confirmed=${confirmed}; screenshot: ${shot}`,
       };
     } catch (e) {
       if (/closed/i.test(e.message)) throw e;
@@ -504,6 +612,13 @@ async function main() {
       saveRows(rows);
       bump(cres.status);
       log(`[${count}/${total}] ${row.Name}: COMMENT ${cres.status} — ${cres.note}`);
+
+      // A captcha means TikTok is actively challenging us — stop the run so we
+      // don't burn the account. This row stays retryable; re-run after solving.
+      if (cres.status === "COMMENT_CAPTCHA") {
+        log(`    -> CAPTCHA detected — halting run. Solve the puzzle in the debug browser, then re-run to resume.`);
+        break;
+      }
     }
 
     // count this creator toward the persisted daily cap

@@ -2,6 +2,8 @@ node_modules/
 .chrome-profile/
 # local debug Chrome profile (holds login cookies — NEVER commit)
 .discover-profile/
+# backup profiles (e.g. faris test account session — NEVER commit)
+.discover-profile-*/
 # generated discovery output (scraped third-party data / PII — keep out of git)
 discovered*.csv
 logs/discover-*.log

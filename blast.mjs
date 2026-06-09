@@ -21,6 +21,22 @@ function log(msg) {
 // {greeting} is replaced per row (the Greeting column in creators.csv).
 const TEMPLATE = `Halo Kak {greeting}, salam kenal. Kami dari tim Nada. Kami perhatikan konten-konten musik di akun Kakak punya karakter yang menarik. Kebetulan saat ini kami sedang mempersiapkan promosi untuk Nada, sebuah aplikasi untuk bikin musik atau compose lagu hanya lewat humming (senandung). Melihat profil Kakak, kami merasa karakter konten dan audiens Kakak sangat cocok dengan aplikasi ini, dan kami tertarik untuk mengajak Kakak berkolaborasi. Jika berkenan, boleh kami minta informasi rate card terbarunya untuk slot TikTok Collab? Terima kasih banyak sebelumnya.`;
 
+// --- comment templates ------------------------------------------------------
+// Posted as a public comment on the creator's latest video to nudge them to
+// check the DM (which lands in the hidden "Requests" folder when we don't
+// follow them). Rotated at random to look less bot-like; {greeting} = name.
+const COMMENT_TEMPLATES = [
+  "Kak {greeting}, aku tertarik buat endorse nih, cek DM ya kak 🙏",
+  "Halo Kak {greeting}, ada penawaran kolaborasi buat Kakak, cek DM ya 🙌",
+  "Kak {greeting} cek DM dong, ada tawaran endorse buat Kakak ✨",
+  "Hai Kak {greeting}, kami tertarik endorse, udah kirim DM ya, cek inbox 😊",
+  "Kak {greeting}, tertarik kolab/endorse nih, cek DM ya kak 🙏",
+];
+function pickComment(greeting) {
+  const t = COMMENT_TEMPLATES[Math.floor(Math.random() * COMMENT_TEMPLATES.length)];
+  return t.replace("{greeting}", greeting);
+}
+
 // --- args -------------------------------------------------------------------
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
@@ -28,6 +44,16 @@ const FRESH = args.includes("--fresh"); // use isolated profile + login instead 
 const limitArg = args.find((a) => a.startsWith("--limit="));
 const LIMIT = limitArg ? parseInt(limitArg.split("=")[1], 10) : Infinity;
 const CDP_URL = process.env.CDP_URL || "http://localhost:9222";
+
+// Commenting upgrade: after a DM is sent, also drop a public comment on the
+// creator's LEAST-popular recent video, nudging them to check the DM (DMs from
+// non-followers land in the hidden Requests folder so they're easy to miss).
+// We pick the lowest-view recent video as a proxy for "few comments" so our
+// comment is actually noticeable instead of buried under a viral video.
+const NO_COMMENT = args.includes("--no-comment");     // DM only (old behavior)
+const COMMENT_ONLY = args.includes("--comment-only"); // skip DM, only comment
+const DO_COMMENT = !NO_COMMENT;
+const COMMENT_VIDEO_TRIES = 3; // least-popular videos to try before giving up
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const TUNELAB_PROFILE = "Profile 16"; // tunelabid@gmail.com
@@ -45,6 +71,8 @@ const MAX_PAGE_ATTEMPTS = 3; // reload-retries for the logged-out-page TikTok bu
 
 // statuses that mean "leave it alone"
 const DONE_STATUSES = new Set(["SENT", "SKIPPED", "SUBMITTED_RED_NOTICE", "NO_DM"]);
+// comment statuses that mean "don't re-comment on re-run"
+const COMMENT_DONE_STATUSES = new Set(["COMMENTED", "COMMENT_DISABLED"]);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jitter = (min, max) => Math.floor(min + Math.random() * (max - min));
@@ -55,13 +83,28 @@ function loadRows() {
 }
 
 function saveRows(rows) {
-  const header = ["No", "Name", "Greeting", "Platform", "Followers", "Notes", "Link", "Status", "SentAt"];
+  const header = ["No", "Name", "Greeting", "Platform", "Followers", "Notes", "Link", "Status", "SentAt", "CommentStatus", "CommentedAt"];
   writeFileSync(CSV_PATH, stringify(rows, { header: true, columns: header }));
 }
 
 function greetingFor(row) {
   return (row.Greeting && row.Greeting.trim()) || row.Name.trim().split(/\s+/)[0];
 }
+
+function stamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// --- per-row state predicates ----------------------------------------------
+const norm = (s) => (s || "").trim();
+const dmDone = (r) => DONE_STATUSES.has(norm(r.Status));
+const dmSentOk = (r) => ["SENT", "SUBMITTED_RED_NOTICE"].includes(norm(r.Status));
+const commentDone = (r) => COMMENT_DONE_STATUSES.has(norm(r.CommentStatus));
+// only comment after the DM actually went out, and only once
+const needsComment = (r) => DO_COMMENT && dmSentOk(r) && !commentDone(r);
+const needsWork = (r) => (COMMENT_ONLY ? needsComment(r) : !dmDone(r) || needsComment(r));
 
 async function ensureLoggedIn(page) {
   await page.goto("https://www.tiktok.com/messages?lang=en", { waitUntil: "domcontentloaded" });
@@ -162,6 +205,133 @@ async function sendOne(page, row) {
   return { status: "SENT", note: `delivery=${delivery}; screenshot: ${shot}` };
 }
 
+// Read the creator's recent videos off their profile grid and rank them by
+// view count ascending. Lowest views ~= fewest comments ~= our comment is
+// noticeable (not buried). Pinned/viral videos have huge view counts so they
+// naturally sort to the end and get skipped. Returns [{href, views}, ...].
+async function pickCandidates(page) {
+  await page.waitForSelector('a[href*="/video/"]', { timeout: 9000 });
+  await sleep(jitter(600, 1200)); // let lazy view-count labels paint
+  const items = await page.evaluate(() => {
+    const parse = (s) => {
+      if (!s) return Infinity; // unknown -> treat as "many", sort last
+      const t = s.trim().toUpperCase();
+      const n = parseFloat(t.replace(/[^0-9.]/g, ""));
+      if (isNaN(n)) return Infinity;
+      if (t.includes("M")) return n * 1e6;
+      if (t.includes("K")) return n * 1e3;
+      return n;
+    };
+    const seen = new Set();
+    const out = [];
+    for (const a of document.querySelectorAll('a[href*="/video/"]')) {
+      const href = a.href.split("?")[0];
+      if (seen.has(href)) continue;
+      seen.add(href);
+      const v =
+        a.querySelector('[data-e2e="video-views"]') ||
+        a.parentElement?.querySelector('[data-e2e="video-views"]');
+      out.push({ href, views: parse(v && v.textContent) });
+      if (out.length >= 15) break;
+    }
+    return out;
+  });
+  return items.sort((a, b) => a.views - b.views);
+}
+
+// After the DM, post a public comment on the least-popular recent video so the
+// creator sees a nudge to check their DM. Tries up to COMMENT_VIDEO_TRIES of
+// the lowest-view videos in case the first has comments disabled.
+async function commentOnVideo(page, row) {
+  const greeting = greetingFor(row);
+  const text = pickComment(greeting);
+  const link = row.Link.trim();
+
+  // Load the profile and rank videos by view count.
+  let candidates = [];
+  for (let attempt = 1; attempt <= MAX_PAGE_ATTEMPTS && !candidates.length; attempt++) {
+    try {
+      log(`    -> [comment] opening profile ${link} (attempt ${attempt}/${MAX_PAGE_ATTEMPTS})`);
+      await page.goto(link, { waitUntil: "domcontentloaded" });
+      await sleep(jitter(1200, 2000));
+      candidates = await pickCandidates(page);
+    } catch (e) {
+      if (/closed/i.test(e.message)) throw e;
+      log(`    -> [comment] profile attempt ${attempt} failed (${e.message.split("\n")[0]})`);
+      if (attempt < MAX_PAGE_ATTEMPTS) await sleep(jitter(1200, 2200));
+    }
+  }
+  if (!candidates.length) {
+    return { status: "COMMENT_FAILED", note: "no videos found on profile" };
+  }
+
+  if (DRY_RUN) {
+    const c = candidates[0];
+    return { status: "COMMENT_DRY_RUN", note: `would comment on ${c.href} (~${c.views} views): "${text}"` };
+  }
+
+  // Try the least-popular videos until one accepts a comment.
+  const tryList = candidates.slice(0, COMMENT_VIDEO_TRIES);
+  for (let i = 0; i < tryList.length; i++) {
+    const cand = tryList[i];
+    try {
+      log(`    -> [comment] video ${i + 1}/${tryList.length}: ${cand.href} (~${cand.views} views)`);
+      await page.goto(cand.href, { waitUntil: "domcontentloaded" });
+      await sleep(jitter(1500, 2500));
+
+      // The comment panel is collapsed by default; click it open to mount the composer.
+      const opener = page
+        .locator('[data-e2e="comment-icon"]')
+        .or(page.getByRole("button", { name: /add comments/i }))
+        .first();
+      try {
+        await opener.click({ timeout: 4000 });
+      } catch {}
+      await sleep(jitter(1000, 1800));
+
+      const box = page
+        .locator('[data-e2e="comment-input"] div[contenteditable="true"]')
+        .or(page.locator(".public-DraftEditor-content"))
+        .first();
+      await box.waitFor({ timeout: 6000 });
+
+      let ccount = null;
+      try {
+        ccount = norm(await page.locator('[data-e2e="comment-count"]').first().textContent());
+      } catch {}
+
+      await box.click();
+      log(`    -> [comment] typing on video with ${ccount ?? "?"} comments (${text.length} chars)`);
+      await box.type(text, { delay: jitter(8, 25) });
+      await sleep(jitter(400, 900));
+
+      // Post via the button if it's enabled, else fall back to Enter.
+      let posted = false;
+      try {
+        const postBtn = page.locator('[data-e2e="comment-post"]').first();
+        await postBtn.waitFor({ timeout: 3000 });
+        await postBtn.click();
+        posted = true;
+      } catch {}
+      if (!posted) await page.keyboard.press("Enter");
+
+      await sleep(jitter(1800, 3000));
+      const shot = `${LOG_DIR}/${row.No}-${greeting.replace(/\W+/g, "_")}-comment.png`;
+      await page.screenshot({ path: shot });
+      log(`    -> [comment] screenshot saved ${shot}`);
+      return {
+        status: "COMMENTED",
+        note: `"${text}" on ${cand.href} (${ccount ?? "?"} comments, ~${cand.views} views); screenshot: ${shot}`,
+      };
+    } catch (e) {
+      if (/closed/i.test(e.message)) throw e;
+      log(`    -> [comment] video ${i + 1} failed (${e.message.split("\n")[0]}); trying next`);
+      await sleep(jitter(1000, 1800));
+    }
+  }
+  return { status: "COMMENT_DISABLED", note: "no commentable video after trying least-popular candidates" };
+}
+
 // Returns { page, cleanup }. Default: attach to your real Chrome over CDP
 // (reuses the logged-in tunelabid session, no login). --fresh uses an
 // isolated profile that you log into once.
@@ -209,11 +379,32 @@ async function ensureHealthy(session) {
   }
 }
 
+// Run one step (DM or comment) with session-repair retry. `fn` is (page,row)->res.
+async function runStep(session, row, fn, label) {
+  let res;
+  for (let tries = 1; tries <= 2; tries++) {
+    try {
+      await ensureHealthy(session);
+      res = await fn(session.page, row);
+      break;
+    } catch (err) {
+      log(`    -> [${label}] error: ${err.message.split("\n")[0]}`);
+      if (tries === 1 && /closed/i.test(err.message)) {
+        log(`    -> repairing session and retrying ${label}`);
+        continue;
+      }
+      res = { status: label === "comment" ? "COMMENT_FAILED" : "ERROR", note: err.message.split("\n")[0] };
+    }
+  }
+  return res;
+}
+
 async function main() {
   const rows = loadRows();
-  const pending = rows.filter((r) => !DONE_STATUSES.has((r.Status || "").trim()));
+  const pending = rows.filter(needsWork);
   log(`run log: ${RUN_LOG}`);
-  log(`${rows.length} rows total, ${pending.length} to process${DRY_RUN ? " (DRY RUN)" : ""}.`);
+  const mode = COMMENT_ONLY ? "comment-only" : DO_COMMENT ? "DM + comment" : "DM only";
+  log(`${rows.length} rows total, ${pending.length} to process — mode: ${mode}${DRY_RUN ? " (DRY RUN)" : ""}.`);
   log(`pacing between profiles: ${DELAY_MIN}-${DELAY_MAX}s`);
 
   const session = await getSession();
@@ -222,37 +413,33 @@ async function main() {
   const total = Math.min(pending.length, LIMIT);
   let count = 0;
   const tally = {};
+  const bump = (s) => (tally[s] = (tally[s] || 0) + 1);
   for (const row of pending) {
     if (count >= LIMIT) break;
     count++;
     const greeting = greetingFor(row);
     log(`[${count}/${total}] ${row.Name} (${greeting}) -> ${row.Link}`);
 
-    let res;
-    for (let tries = 1; tries <= 2; tries++) {
-      try {
-        await ensureHealthy(session);
-        res = await sendOne(session.page, row);
-        break;
-      } catch (err) {
-        log(`    -> error: ${err.message.split("\n")[0]}`);
-        if (tries === 1 && /closed/i.test(err.message)) {
-          log(`    -> repairing session and retrying this creator`);
-          continue;
-        }
-        res = { status: "ERROR", note: err.message.split("\n")[0] };
-      }
+    // --- DM step ---
+    if (!COMMENT_ONLY && !dmDone(row)) {
+      const res = await runStep(session, row, sendOne, "dm");
+      row.Status = res.status;
+      if (dmSentOk(row)) row.SentAt = stamp();
+      saveRows(rows); // persist after every step -> resumable
+      bump(res.status);
+      log(`[${count}/${total}] ${row.Name}: DM ${res.status} — ${res.note}`);
     }
 
-    row.Status = res.status;
-    if (res.status === "SENT" || res.status === "SUBMITTED_RED_NOTICE") {
-      const d = new Date();
-      const p = (n) => String(n).padStart(2, "0");
-      row.SentAt = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    // --- comment step (only after a DM actually went out) ---
+    if (needsComment(row)) {
+      await sleep(jitter(1500, 3000)); // small gap between DM and comment
+      const cres = await runStep(session, row, commentOnVideo, "comment");
+      row.CommentStatus = cres.status;
+      if (cres.status === "COMMENTED") row.CommentedAt = stamp();
+      saveRows(rows);
+      bump(cres.status);
+      log(`[${count}/${total}] ${row.Name}: COMMENT ${cres.status} — ${cres.note}`);
     }
-    saveRows(rows); // persist after every creator -> resumable
-    tally[res.status] = (tally[res.status] || 0) + 1;
-    log(`[${count}/${total}] ${row.Name}: ${res.status} — ${res.note}`);
 
     // gap between creators
     if (count < total) {

@@ -18,7 +18,10 @@ discover.mjs  →  discovered-*.csv  →  screen.mjs  →  creators.csv  →  bl
   keepers straight to `creators.csv`. Goes beyond raw stats so the pipeline runs
   discovery-to-DM with no manual review. Needs `OPENAI_API_KEY`.
 - **`blast.mjs`** — read `creators.csv` and send each pending creator a templated
-  DM, screenshotting and recording delivery status as it goes.
+  DM, then drop a public comment on their **least-popular recent video** nudging
+  them to check the DM (DMs from non-followers land in the hidden Requests folder,
+  so they're easy to miss). The low-view video is a proxy for "few comments" so
+  the nudge is actually noticeable. Screenshots and records both steps as it goes.
 
 ---
 
@@ -79,12 +82,24 @@ node discover.mjs "#reviewbuku" "#booktokindonesia" "rekomendasi buku" \
   --min-followers=10000 --max-followers=100000 --target=1000
 ```
 
-### Blast DMs
+### Blast DMs (+ comment nudge)
 ```bash
-npm run dry        # dry run — finds the Message button but sends nothing
-npm run blast      # send to every pending row in creators.csv
+npm run dry        # dry run — finds the Message button + picks a video, sends nothing
+npm run blast      # DM every pending row, then comment on their least-popular video
 node blast.mjs --limit=5 --delay=6,14
+node blast.mjs --no-comment      # DM only (old behavior)
+node blast.mjs --comment-only    # skip DMs, only post comment nudges on already-DMed rows
 ```
+
+The DM and comment steps are tracked separately, so the run is resumable per step:
+- `Status` / `SentAt` — the DM (`SENT`, `NO_DM`, `SKIPPED`, …).
+- `CommentStatus` / `CommentedAt` — the comment (`COMMENTED`, `COMMENT_DISABLED`,
+  `COMMENT_FAILED`). The comment only fires **after** a DM actually sends, and only
+  once. Re-running blast will post comments on rows already DMed in a prior run.
+
+The comment text rotates among a few `{greeting}`-personalized variants (e.g.
+*"Kak {name}, aku tertarik buat endorse nih, cek DM ya kak 🙏"*) — edit
+`COMMENT_TEMPLATES` in `blast.mjs` to change them.
 
 ---
 

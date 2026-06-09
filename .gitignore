@@ -10,3 +10,7 @@ logs/discover-state-*.json
 
 # per-machine daily action counter (local only)
 logs/daily-state.json
+
+# run logs + screenshots (local artifacts)
+logs/run-*.log
+logs/*.png

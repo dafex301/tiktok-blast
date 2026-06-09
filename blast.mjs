@@ -210,7 +210,7 @@ async function sendOne(page, row) {
 // noticeable (not buried). Pinned/viral videos have huge view counts so they
 // naturally sort to the end and get skipped. Returns [{href, views}, ...].
 async function pickCandidates(page) {
-  await page.waitForSelector('a[href*="/video/"]', { timeout: 9000 });
+  await page.waitForSelector('a[href*="/video/"]', { timeout: 15000 });
   await sleep(jitter(600, 1200)); // let lazy view-count labels paint
   const items = await page.evaluate(() => {
     const parse = (s) => {
@@ -279,49 +279,60 @@ async function commentOnVideo(page, row) {
       await page.goto(cand.href, { waitUntil: "domcontentloaded" });
       await sleep(jitter(1500, 2500));
 
-      // The comment panel is collapsed by default; click it open to mount the composer.
-      const opener = page
-        .locator('[data-e2e="comment-icon"]')
-        .or(page.getByRole("button", { name: /add comments/i }))
-        .first();
+      // The comment panel is collapsed by default; the reliable opener is the
+      // button whose accessible name is "Read or add comments" (clicking the raw
+      // comment-icon svg hangs). Clicking it mounts the composer + post button.
       try {
-        await opener.click({ timeout: 4000 });
-      } catch {}
+        const opener = page.getByRole("button", { name: /add comments/i }).first();
+        await opener.waitFor({ state: "visible", timeout: 9000 });
+        await opener.click({ timeout: 6000 });
+      } catch {
+        // fallback for layouts/locales without that aria label
+        try { await page.locator('[data-e2e="comment-icon"]').first().click({ timeout: 4000 }); } catch {}
+      }
       await sleep(jitter(1000, 1800));
 
       const box = page
         .locator('[data-e2e="comment-input"] div[contenteditable="true"]')
         .or(page.locator(".public-DraftEditor-content"))
         .first();
-      await box.waitFor({ timeout: 6000 });
+      await box.waitFor({ state: "visible", timeout: 8000 });
 
       let ccount = null;
       try {
         ccount = norm(await page.locator('[data-e2e="comment-count"]').first().textContent());
       } catch {}
 
-      await box.click();
+      // The editor is visible but the video player overlaps it, so a normal
+      // click hangs on Playwright's "is it obscured" check — force-click to
+      // focus, then type via the keyboard (Draft.js ignores programmatic value).
+      await box.scrollIntoViewIfNeeded().catch(() => {});
+      await box.click({ force: true });
       log(`    -> [comment] typing on video with ${ccount ?? "?"} comments (${text.length} chars)`);
-      await box.type(text, { delay: jitter(8, 25) });
+      await page.keyboard.type(text, { delay: jitter(8, 25) });
       await sleep(jitter(400, 900));
 
-      // Post via the button if it's enabled, else fall back to Enter.
+      // The Post button stays disabled="" until text is present; wait for the
+      // enabled one, then click. Fall back to Enter if it never enables.
       let posted = false;
       try {
-        const postBtn = page.locator('[data-e2e="comment-post"]').first();
-        await postBtn.waitFor({ timeout: 3000 });
-        await postBtn.click();
+        const postBtn = page.locator('[data-e2e="comment-post"]:not([disabled])').first();
+        await postBtn.waitFor({ state: "visible", timeout: 5000 });
+        await postBtn.click({ timeout: 5000 });
         posted = true;
       } catch {}
       if (!posted) await page.keyboard.press("Enter");
 
       await sleep(jitter(1800, 3000));
+      // Ground-truth-ish: the editor clears once a comment actually submits.
+      let cleared = false;
+      try { cleared = !(await box.innerText()).trim(); } catch { cleared = true; }
       const shot = `${LOG_DIR}/${row.No}-${greeting.replace(/\W+/g, "_")}-comment.png`;
       await page.screenshot({ path: shot });
       log(`    -> [comment] screenshot saved ${shot}`);
       return {
         status: "COMMENTED",
-        note: `"${text}" on ${cand.href} (${ccount ?? "?"} comments, ~${cand.views} views); screenshot: ${shot}`,
+        note: `"${text}" on ${cand.href} (${ccount ?? "?"} comments, ~${cand.views} views); submitted=${cleared}; screenshot: ${shot}`,
       };
     } catch (e) {
       if (/closed/i.test(e.message)) throw e;
@@ -329,7 +340,9 @@ async function commentOnVideo(page, row) {
       await sleep(jitter(1000, 1800));
     }
   }
-  return { status: "COMMENT_DISABLED", note: "no commentable video after trying least-popular candidates" };
+  // Exhausted candidates — treat as retryable (could be transient load issues),
+  // not a permanent skip. Re-running blast will try this creator again.
+  return { status: "COMMENT_FAILED", note: "no commentable video after trying least-popular candidates" };
 }
 
 // Returns { page, cleanup }. Default: attach to your real Chrome over CDP
